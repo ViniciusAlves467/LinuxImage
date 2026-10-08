@@ -1,18 +1,33 @@
-# ══════════════════════════════════════════════════════════════
-# IoTracker / Rota SU - Template HTML do e-mail de alertas
-# ══════════════════════════════════════════════════════════════
-# Identidade visual baseada no deck "Rota SU - Conecta 2026":
-#   - Verde floresta (#142B22 / #1B4332) como cor dominante
-#   - Verde musgo (#97BC62) para rótulos em caixa alta
-#   - Verde ação (#43A047) como destaque
-#   - Títulos em Georgia (serifa), corpo em Calibri/Segoe UI
-#
-# Compatível com Outlook desktop (layout 100% em <table>, estilos
-# inline, cores também em bgcolor) e responsivo até ~360px.
-# ══════════════════════════════════════════════════════════════
+import requests as req
+import json
 from datetime import datetime
 from html import escape
 
+# ══════════════════════════════════════════════════════════════
+# NOTIFICAÇÕES - MICROSOFT TEAMS + OUTLOOK
+# ══════════════════════════════════════════════════════════════
+# Teams: Crie um Incoming Webhook no canal desejado:
+# https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook
+#
+# Outlook: O corpo HTML abaixo pode ser usado com:
+#   - Power Automate: trigger "When a row is added" na tabela Delta de alertas
+#   - Ou: endpoint HTTP trigger do Power Automate chamado diretamente daqui
+#
+# E-mail com identidade visual do deck "Rota SU - Conecta 2026":
+#   verde floresta dominante, rótulos em verde musgo, títulos em Georgia.
+#   Layout 100% em <table> com estilos inline (compatível com Outlook desktop).
+# ══════════════════════════════════════════════════════════════
+
+# --- CONFIGURAÇÃO ---
+TEAMS_WEBHOOK_URL       = "<COLE_URL_DO_WEBHOOK_TEAMS>"
+POWER_AUTOMATE_HTTP_URL = "<COLE_URL_DO_TRIGGER_POWER_AUTOMATE>"  # Opcional
+EMAIL_DESTINATARIOS     = ["gestor@usiminas.com"]  # Ajustar
+LINK_PAINEL             = None  # Opcional: URL do dashboard "Gestão à Vista" (gera o botão no e-mail)
+
+
+# ┌────────────────────────────────────────────────┐
+# │  TEMPLATE HTML DO E-MAIL (Rota SU)              │
+# └────────────────────────────────────────────────┘
 # --- Paleta (deck Rota SU) ---
 VERDE_NOITE  = "#142B22"   # fundo do cabeçalho / rodapé
 VERDE_FLORES = "#1B4332"   # painéis sobre o fundo escuro
@@ -236,3 +251,119 @@ def montar_email_html(alertas, gerado_em=None, link_painel=None):
 </table>
 </body>
 </html>"""
+
+
+# ══════════════════════════════════════════════════════════════
+# EXECUÇÃO
+# ══════════════════════════════════════════════════════════════
+
+# --- Filtrar alertas que precisam de notificação ---
+df_alertas_pd = df_alertas.toPandas()
+alertas_notificar = df_alertas_pd[df_alertas_pd["prioridade"].isin(["media", "alta", "critica"])]
+total_alertas = len(alertas_notificar)
+
+print(f"Alertas para notificar: {total_alertas}")
+print(f"Total geral: {len(df_alertas_pd)} | Baixa: {len(df_alertas_pd[df_alertas_pd['prioridade']=='baixa'])}")
+print("=" * 70)
+
+if total_alertas > 0:
+    # ┌────────────────────────────────────────────────┐
+    # │  MICROSOFT TEAMS - Adaptive Card               │
+    # └────────────────────────────────────────────────┘
+    icone_nivel = {"Atenção": "⚠️", "Atraso": "\U0001f6a8", "Crítico": "\U0001f525"}
+
+    card_body = [
+        {
+            "type": "TextBlock",
+            "text": f"IoTracker - {total_alertas} Alerta(s) de Rack",
+            "size": "Large", "weight": "Bolder", "color": "Attention"
+        },
+        {
+            "type": "TextBlock",
+            "text": f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+            "size": "Small", "isSubtle": True
+        },
+    ]
+
+    for _, a in alertas_notificar.iterrows():
+        icone = icone_nivel.get(a["nivel_alerta"], "")
+        card_body.append({"type": "ColumnSet", "columns": [
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": f"{icone} **{a['alias']}** ({a['placa']})",
+                 "weight": "Bolder"}
+            ]}
+        ]})
+        card_body.append({"type": "FactSet", "facts": [
+            {"title": "Nível",        "value": a["nivel_alerta"]},
+            {"title": "Localização",  "value": a["localizacao"]},
+            {"title": "Dias",         "value": str(a["dias_no_status"])},
+            {"title": "% Ciclo",      "value": f"{a['pct_ciclo']}%"},
+            {"title": "Anomalias",    "value": a["anomalias"]},
+            {"title": "Score PCP",    "value": str(a["score_pcp"])},
+            {"title": "Abastecimento","value": a["abastecimento"]},
+        ]})
+        card_body.append({"type": "TextBlock", "text": "---", "spacing": "Small"})
+
+    adaptive_card = {
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": card_body
+            }
+        }]
+    }
+
+    # --- Enviar para Teams ---
+    if TEAMS_WEBHOOK_URL != "<COLE_URL_DO_WEBHOOK_TEAMS>":
+        try:
+            resp = req.post(TEAMS_WEBHOOK_URL, json=adaptive_card, timeout=30)
+            if resp.status_code in (200, 202):
+                print(f"✅ Teams: Notificação enviada com sucesso!")
+            else:
+                print(f"❌ Teams: Erro {resp.status_code} - {resp.text[:200]}")
+        except Exception as e:
+            print(f"❌ Teams: Falha na conexão - {e}")
+    else:
+        print("⚠️  Teams: Configure TEAMS_WEBHOOK_URL para ativar")
+        print("    Passos: Teams > Canal > Conectores > Incoming Webhook > Copiar URL")
+
+    # ┌────────────────────────────────────────────────┐
+    # │  OUTLOOK / EMAIL - HTML para Power Automate      │
+    # └────────────────────────────────────────────────┘
+    email_html = montar_email_html(alertas_notificar, link_painel=LINK_PAINEL)
+
+    # --- Enviar para Power Automate (trigger HTTP) ---
+    if POWER_AUTOMATE_HTTP_URL != "<COLE_URL_DO_TRIGGER_POWER_AUTOMATE>":
+        n_criticos = int((alertas_notificar["prioridade"] == "critica").sum())
+        payload = {
+            "assunto": (f"\U0001f534 IoTracker | {n_criticos} crítico(s) - {total_alertas} rack(s) exigem ação"
+                        if n_criticos else f"IoTracker | {total_alertas} rack(s) exigem ação"),
+            "corpo_html": email_html,
+            "destinatarios": EMAIL_DESTINATARIOS,
+            "prioridade": "alta" if n_criticos else "normal",
+        }
+        try:
+            resp = req.post(POWER_AUTOMATE_HTTP_URL, json=payload, timeout=30)
+            print(f"✅ Power Automate: Trigger enviado ({resp.status_code})")
+        except Exception as e:
+            print(f"❌ Power Automate: Falha - {e}")
+    else:
+        print("\n⚠️  Outlook/Email: Configure POWER_AUTOMATE_HTTP_URL para ativar")
+        print("    Passos no Power Automate:")
+        print("    1. Novo fluxo > Trigger 'When an HTTP request is received'")
+        print("    2. Ação: 'Send an email (V2)' do Outlook")
+        print("    3. Usar corpo_html do payload como Body do email")
+        print("    4. Copiar a URL do trigger e colar em POWER_AUTOMATE_HTTP_URL")
+
+    # --- Preview do email ---
+    print("\n" + "=" * 70)
+    print("  PREVIEW DO EMAIL")
+    print("=" * 70)
+    displayHTML(email_html)
+
+else:
+    print("✅ Todos os racks estão no prazo. Nenhuma notificação necessária.")
