@@ -23,6 +23,8 @@ TEAMS_WEBHOOK_URL       = "<COLE_URL_DO_WEBHOOK_TEAMS>"
 POWER_AUTOMATE_HTTP_URL = "<COLE_URL_DO_TRIGGER_POWER_AUTOMATE>"  # Opcional
 EMAIL_DESTINATARIOS     = ["gestor@usiminas.com"]  # Ajustar
 LINK_PAINEL             = None  # Opcional: URL do dashboard "Gestão à Vista" (gera o botão no e-mail)
+TABELA_ALERTAS          = None  # Opcional: tabela Delta de alertas (ex.: "catalogo.schema.iotracker_alertas"),
+                                # usada só quando df_alertas não existe na sessão
 
 
 # ┌────────────────────────────────────────────────┐
@@ -256,6 +258,19 @@ def montar_email_html(alertas, gerado_em=None, link_painel=None):
 # ══════════════════════════════════════════════════════════════
 # EXECUÇÃO
 # ══════════════════════════════════════════════════════════════
+
+# --- Garantir que df_alertas existe (vem das células anteriores do notebook) ---
+try:
+    df_alertas
+except NameError:
+    if TABELA_ALERTAS:
+        print(f"df_alertas n\u00e3o encontrado na sess\u00e3o - lendo da tabela {TABELA_ALERTAS}")
+        df_alertas = spark.table(TABELA_ALERTAS)
+    else:
+        raise NameError(
+            "df_alertas n\u00e3o existe nesta sess\u00e3o. Execute as c\u00e9lulas anteriores do notebook "
+            "(menu da c\u00e9lula > 'Run all above') ou preencha TABELA_ALERTAS com a tabela Delta de alertas."
+        )
 
 # --- Filtrar alertas que precisam de notificação ---
 df_alertas_pd = df_alertas.toPandas()
